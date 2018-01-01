@@ -1,6 +1,6 @@
 __precompile__(true)
 
-module Printf
+module Printff
 
 
 # the implementations here is copied from

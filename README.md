@@ -1,7 +1,7 @@
-# Printf
+# Printff
 
-[![Build Status](https://travis-ci.org/KlausC/Printf.jl.svg?branch=master)](https://travis-ci.org/KlausC/Printf.jl)
+[![Build Status](https://travis-ci.org/KlausC/Printff.jl.svg?branch=master)](https://travis-ci.org/KlausC/Printff.jl)
 
-[![Coverage Status](https://coveralls.io/repos/KlausC/Printf.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/KlausC/Printf.jl?branch=master)
+[![Coverage Status](https://coveralls.io/repos/KlausC/Printff.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/KlausC/Printff.jl?branch=master)
 
-[![codecov.io](http://codecov.io/github/KlausC/Printf.jl/coverage.svg?branch=master)](http://codecov.io/github/KlausC/Printf.jl?branch=master)
+[![codecov.io](http://codecov.io/github/KlausC/Printff.jl/coverage.svg?branch=master)](http://codecov.io/github/KlausC/Printff.jl?branch=master)

@@ -1,6 +1,6 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-using Test, Printf
+using Test, Printff
 
 macro test_throws(ty, ex)
     return quote
