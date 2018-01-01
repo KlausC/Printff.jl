@@ -1,4 +1,4 @@
-The PrintfExt.jl package is licensed under the MIT "Expat" License:
+The Printf.jl package is licensed under the MIT "Expat" License:
 
 > Copyright (c) 2018: Klaus Crusius.
 >
