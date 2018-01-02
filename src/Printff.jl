@@ -8,6 +8,7 @@ module Printff
 
 export @printf, @sprintf
 export format, printf, sprintf
+export gen_test1, gen_test2, gen_test3
 
 import Base.Printf: is_str_expr, fix_dec, DIGITS, print_fixed, decode_dec, decode_hex,
                    ini_hex, ini_HEX, print_exp_a, decode_0ct, decode_HEX, ini_dec, print_exp_e,
@@ -293,9 +294,7 @@ end
 
 function _format(fmt::AbstractString)
     sym_args, blk, perm = gen(fmt)
-    @gensym format
-    @gensym sformat
-    fun1 = :($format(out::IO) = nothing)
+    fun1 = :($(genfun())(out::IO) = nothing)
     alist = fun1.args[1].args 
     if isperm(perm)
         append!(alist, sym_args[invperm(perm)])
@@ -306,19 +305,7 @@ function _format(fmt::AbstractString)
     end
     fun1.args[2].args[2] = blk
     
-    #=
-    # providing default first argument
-    fun2 = :($format() = $format(STDOUT))
-    append!(fun2.args[1].args, alist[3:end])
-    append!(fun2.args[2].args[2].args, alist[3:end])
-    
-    # like sprintf - output to string
-    fun3 = :($sformat() = begin io = IOBuffer(); $format(io); String(take!(io)) end)
-    append!(fun3.args[1].args, alist[3:end])
-    append!(fun3.args[2].args[2].args[4].args, alist[3:end])
-    =#
     eval(fun1)
-    # eval(fun2), eval(fun3)
 end
 
 function permute_args(sym, perm)
@@ -333,10 +320,9 @@ function permute_args(sym, perm)
     end
     fargs = Vector(uninitialized, n)
     for i in r
-        @gensym a
         ti = targs[i]
         ti == Union{} && throw(ArgumentError("incompatible types for pos $i"))
-        fargs[i] = :($a::$(targs[i]))
+        fargs[i] = :($(gensym())::$(targs[i]))
     end
     assi = Vector(uninitialized, length(perm))
     for (j, i) in enumerate(perm)
@@ -352,8 +338,8 @@ function format(fmt::AbstractString)
     end
 end
 
-printf(io::IO, fmt::Function, args...) = Base.invokelatest(fmt, io, args...)
-printf(fmt::Function, args...) = printf(STDOUT, args...)
+printf(io::IO, fmt::Function, args...) = Base.invokelatest(fmt, io, args...)::Nothing
+printf(fmt::Function, args...) = printf(STDOUT, fmt, args...)
 function sprintf(fmt::Function, args...)
     io = IOBuffer()
     printf(io, args...)
@@ -364,6 +350,10 @@ printf(io::IO, fmt::AbstractString, args...) = printf(io, format(fmt), args...)
 printf(fmt::AbstractString, args...) = printf(STDOUT, fmt, args...)
 sprintf(fmt::AbstractString, args...) = sprintf(format(fmt), args)
 
+# generate a syntactic correct unique function name in this Module
+genfun() = Symbol("fmt", replace(string(gensym()), '#'=>'_'))
+
 const ALL_FORMATS = Dict{String, Function}()
+
 
 end # module
