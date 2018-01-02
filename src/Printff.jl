@@ -188,9 +188,8 @@ function _printf(macroname, io, fmt, args)
     end
 
     isa(fmt, AbstractString) ||
-        throw(ArgumentError("$macroname: format must be a plain static or raw string (no interpolation or prefix)"))
+        throw(ArgumentError("$macroname: format must be a plain static string (no interpolation or prefix)"))
     sym_args, blk, perm = gen(fmt)
-    args = args[perm]
     has_splatting = false
     for arg in args
        if isa(arg, Expr) && arg.head == :...
@@ -198,20 +197,24 @@ function _printf(macroname, io, fmt, args)
           break
        end
     end
-
+    sargl = max(0, perm...)
     #
     #  Immediately check for corresponding arguments if there is no splatting
     #
-    if !has_splatting && length(sym_args) != length(args)
-       throw(ArgumentError("$macroname: wrong number of arguments ($(length(args))) should be ($(length(sym_args)))"))
+    if !has_splatting
+        argl = length(args)
+        if sargl != argl
+            throw(ArgumentError("$macroname: wrong number of arguments ($argl) should be ($sargl)"))
+        end
+        1:argl ⊆ perm || throw(ArgumentError("$macroname: invalid permutation '$perm'"))
     end
-
+    
     for i = length(sym_args):-1:1
         var = sym_args[i].args[1]
         if has_splatting
-           pushfirst!(blk.args, :($var = G[$i]))
+            pushfirst!(blk.args, :($var = G[$(perm[i])]))
         else
-           pushfirst!(blk.args, :($var = $(esc(args[i]))))
+            pushfirst!(blk.args, :($var = $(esc(args[perm[i]]))))
         end
     end
 
@@ -224,9 +227,11 @@ function _printf(macroname, io, fmt, args)
        pushfirst!(blk.args,
           quote
              G = $(esc(x))
-             if length(G) != $(length(sym_args))
-                throw(ArgumentError($macroname,": wrong number of arguments (",length(G),") should be (",$(length(sym_args)),")"))
+             argl = length(G)
+             if argl != $sargl 
+                 throw(ArgumentError(string($macroname,": wrong number of arguments (",length(G),") should be (",$sargl,")")))
              end
+             1:argl ⊆ $perm || throw(ArgumentError(string($macroname,": invalid permutation '",$perm,"'")))
           end
        )
     end
@@ -342,13 +347,13 @@ printf(io::IO, fmt::Function, args...) = Base.invokelatest(fmt, io, args...)::No
 printf(fmt::Function, args...) = printf(STDOUT, fmt, args...)
 function sprintf(fmt::Function, args...)
     io = IOBuffer()
-    printf(io, args...)
+    printf(io, fmt, args...)
     String(take!(io))
 end
 
 printf(io::IO, fmt::AbstractString, args...) = printf(io, format(fmt), args...)
-printf(fmt::AbstractString, args...) = printf(STDOUT, fmt, args...)
-sprintf(fmt::AbstractString, args...) = sprintf(format(fmt), args)
+printf(fmt::AbstractString, args...) = printf(format(fmt), args...)
+sprintf(fmt::AbstractString, args...) = sprintf(format(fmt), args...)
 
 # generate a syntactic correct unique function name in this Module
 genfun() = Symbol("fmt", replace(string(gensym()), '#'=>'_'))

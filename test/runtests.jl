@@ -1,10 +1,11 @@
-# This file is a part of Julia. License is MIT: https://julialang.org/license
+# This file is not a part of Julia. License is MIT: https://julialang.org/license
 
 using Test, Printff
 
-macro test_throws(ty, ex)
+# to test macro expansion - call like @test_thm Exception @macroexpand(@sprintf ...)
+macro test_thm(ty, ex)
     return quote
-        Test.@test_throws $(esc(ty)) try
+        @test_throws $(esc(ty)) try
             $(esc(ex))
         catch err
             @test err isa LoadError
@@ -204,14 +205,14 @@ end
 # escape %
 @test (@sprintf "%%") == "%"
 @test (@sprintf "%%s") == "%s"
-@test_throws ArgumentError("invalid printf format string: \"%\"") @macroexpand(@sprintf "%") #" (fixes syntax highlighting)
+@test_thm ArgumentError("invalid printf format string: \"%\"") @macroexpand(@sprintf "%") #" (fixes syntax highlighting)
 
 # argument count
-@test_throws ArgumentError("@sprintf: wrong number of arguments (0) should be (1)") @macroexpand(@sprintf "%s")
-@test_throws ArgumentError("@sprintf: wrong number of arguments (2) should be (1)") @macroexpand(@sprintf "%s" "1" "2")
+@test_thm ArgumentError("@sprintf: wrong number of arguments (0) should be (1)") @macroexpand(@sprintf "%s")
+@test_thm ArgumentError("@sprintf: wrong number of arguments (2) should be (1)") @macroexpand(@sprintf "%s" "1" "2")
 
 # no interpolation
-@test_throws ArgumentError("@sprintf: format must be a plain static string (no interpolation or prefix)") @macroexpand(@sprintf "$n")
+@test_thm ArgumentError("@sprintf: format must be a plain static string (no interpolation or prefix)") @macroexpand(@sprintf "$n")
 
 # type width specifier parsing (ignored)
 @test (@sprintf "%llf" 1.2) == "1.200000"
@@ -257,7 +258,7 @@ end
 # invalid format specifiers, not "diouxXDOUeEfFgGaAcCsSpn"
 for c in "bBhHIjJkKlLmMNPqQrRtTvVwWyYzZ"
     fmt_str = string("%", c)
-    @test_throws ArgumentError("@sprintf: first argument must be a format string") @macroexpand(@sprintf $fmt_str 1)
+    @test_thm ArgumentError("@sprintf: first argument must be a format string") @macroexpand(@sprintf $fmt_str 1)
 end
 
 # combo
@@ -269,8 +270,10 @@ end
 # comprehension
 @test (@sprintf "%s %s %s %d %d %d %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 101 1001 12 102 1002 13.000000 103.000000 1003.000000"
 
+@test_throws ArgumentError("@sprintf: wrong number of arguments (9) should be (10)") (@sprintf "%s %s %s %d %d %d %f %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...)
+
 # @printf
-@test_throws ArgumentError("@printf: first or second argument must be a format string") @macroexpand(@printf 1)
+@test_thm ArgumentError("@printf: first or second argument must be a format string") @macroexpand(@printf 1)
 
 # Check bug with trailing nul printing BigFloat
 @test (@sprintf("%.330f", BigFloat(1)))[end] != '\0'
@@ -285,7 +288,30 @@ end
 @test (@sprintf("%d\u0f00%d", 1, 2)) == "1\u0f002"
 @test (@sprintf("%d\U0001ffff%d", 1, 2)) == "1\U0001ffff2"
 @test (@sprintf("%d\u2203%d\u0203", 1, 2)) == "1\u22032\u0203"
-@test_throws ArgumentError @macroexpand(@sprintf("%y%d", 1, 2))
-@test_throws ArgumentError @macroexpand(@sprintf("%\u00d0%d", 1, 2))
-@test_throws ArgumentError @macroexpand(@sprintf("%\u0f00%d", 1, 2))
-@test_throws ArgumentError @macroexpand(@sprintf("%\U0001ffff%d", 1, 2))
+@test_thm ArgumentError @macroexpand(@sprintf("%y%d", 1, 2))
+@test_thm ArgumentError @macroexpand(@sprintf("%\u00d0%d", 1, 2))
+@test_thm ArgumentError @macroexpand(@sprintf("%\u0f00%d", 1, 2))
+@test_thm ArgumentError @macroexpand(@sprintf("%\U0001ffff%d", 1, 2))
+
+# test extensions
+# change argument positions
+@test (@sprintf("%2&d %3&d %1&d", 41, 42, 43)) == "42 43 41"
+# reuse of arguments
+@test (@sprintf("%2&d %3&d %1&d %2&d", 41, 42, 43)) == "42 43 41 42"
+
+# all or no argument positions required
+@test_thm ArgumentError("argument positions not allowed") @macroexpand(@sprintf("%d %2&d",1,2))
+@test_thm ArgumentError("argument positions required") @macroexpand(@sprintf("%1&d %d",1,2))
+
+# combo
+@test (@sprintf "%4&f %3&d %2&d %1&f" 1.0 [3 4]... 5) == "5.000000 4 3 1.000000"
+
+# multi
+@test (@sprintf "%1&s %9&f %10&9.5f %2&d %3&d %4&d %5&d%6&d%7&d%8&d" [1:6;]... [7,8,9,10]...) == "1 9.000000  10.00000 2 3 4 5678"
+
+# comprehension
+@test (@sprintf "%1&s %4&s %7&s %2&d %5&d %8&d %3&f %6&f %9&f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 12 13 101 102 103 1001.000000 1002.000000 1003.000000"
+@test (@sprintf "%1&s %4&s %7&s %2&d %5&d %8&d %3&f %6&f %9&f %1&f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 12 13 101 102 103 1001.000000 1002.000000 1003.000000 11.000000"
+
+@test_throws ArgumentError("@sprintf: wrong number of arguments (9) should be (10)") (@sprintf "%1&s %4&s %7&s %2&d %5&d %8&d %3&f %6&f %9&f %10&f" Any[10^x+y for x=1:3,y=1:3 ]...)
+
