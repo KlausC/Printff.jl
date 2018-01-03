@@ -7,49 +7,46 @@ module Printff
 # what is left in base/printf.jl, and uses the utility there
 
 export @printf, @sprintf
-export format, printf, sprintf
-export gen_test1, gen_test2, gen_test3
+export format, format_expr, printf, sprintf
 
 import Base.Printf: is_str_expr, fix_dec, DIGITS, print_fixed, decode_dec, decode_hex,
                    ini_hex, ini_HEX, print_exp_a, decode_0ct, decode_HEX, ini_dec, print_exp_e,
                    decode_oct, _limit
 
-using Base.Printf: is_str_expr, gen_f, gen_e, gen_a, gen_g, gen_c, gen_s, gen_p, gen_d
+using Base.Printf: gen_f, gen_e, gen_a, gen_g, gen_c, gen_s, gen_p, gen_d
 using Unicode:  lowercase, textwidth
 
 # copied from Base.Printf - amended by additional features:
-# 1. argument positions %(\d+[$&])
+# 1. optional argument positions %(\d+[$&])
+# 2. special term %\d+% standing for %\d+&s
+
+### generate code from parser output ###
 
 function gen(s::AbstractString)
     args = []
     perm = Int[]
-    ipos = 0
     blk = Expr(:block, :(local neg, pt, len, exp, do_out, args))
+    blkst = blk.args
     for x in parse(s)
-        if isa(x,AbstractString)
-            push!(blk.args, :(write(out, $(length(x)==1 ? x[1] : x))))
+        if isa(x, AbstractString)
+            push!(blkst, :(write(out, $(length(x)==1 ? x[1] : x))))
         else
-            pos = x[1]
-            if pos == 0
-                ipos += 1
-                pos = ipos
-            end
             c = lowercase(x[end])
-            f = c=='f' ? gen_f :
-                c=='e' ? gen_e :
-                c=='a' ? gen_a :
-                c=='g' ? gen_g :
-                c=='c' ? gen_c :
-                c=='s' ? gen_s :
-                c=='p' ? gen_p :
-                         gen_d
+            f = c == 'f' ? gen_f :
+                c == 'e' ? gen_e :
+                c == 'a' ? gen_a :
+                c == 'g' ? gen_g :
+                c == 'c' ? gen_c :
+                c == 's' ? gen_s :
+                c == 'p' ? gen_p :
+                           gen_d
             arg, ex = f(x[2:end]...)
-            push!(args, arg)
-            push!(perm, pos)
-            push!(blk.args, ex)
+            push!(args, arg)    # variable name and type ':(var::type)'
+            push!(perm, x[1])   # position number
+            push!(blkst, ex)    # executable statement write to 'out' 
         end
     end
-    push!(blk.args, :nothing)
+    push!(blkst, :nothing) # end of statement list in blk
     return args, blk, perm
 end
 
@@ -57,7 +54,7 @@ end
 
 function parse(s::AbstractString)
     # parse format string into strings and format tuples
-    reqpos = -1
+    curpos = 0
     list = []
     i = j = start(s)
     j1 = 0 # invariant: j1 == prevind(s, j)
@@ -72,10 +69,8 @@ function parse(s::AbstractString)
             if conversion == '%'
                 push!(list, "%")
             else
-                pos == 0 && reqpos > 0 && throw(ArgumentError("argument positions required"))
-                pos > 0 && reqpos == 0 && throw(ArgumentError("argument positions not allowed"))
-                reqpos = ifelse(pos == 0, 0, 1)
-                push!(list, (pos,flags,width,precision,conversion))
+                curpos = pos == 0 ? curpos + 1 : pos
+                push!(list, (curpos,flags,width,precision,conversion))
             end
             i = k
         end
@@ -86,23 +81,31 @@ function parse(s::AbstractString)
     # coalesce adjacent strings
     i = 1
     while i < length(list)
-        if isa(list[i],AbstractString)
+        if isa(list[i], AbstractString)
             for outer j = i+1:length(list)
-                if !isa(list[j],AbstractString)
+                if !isa(list[j], AbstractString)
                     j -= 1
                     break
                 end
                 list[i] *= list[j]
             end
-            deleteat!(list,i+1:j)
+            deleteat!(list, i+1:j)
         end
         i += 1
     end
     return list
 end
 
-## parse a single printf specifier ##
+## step forward or bail out at end
+function next_or_die(s::AbstractString, k)
+    if !done(s,k)
+        next(s,k)
+    else
+        throw(ArgumentError("invalid printf format string: $(repr(s))"))
+    end
+end
 
+## parse a single printf specifier ##
 # printf specifiers:
 #   %                       # start
 #   (\d+\[$&])?             # arg position
@@ -111,10 +114,8 @@ end
 #   (\.\d*)?                # precision
 #   (h|hh|l|ll|L|j|t|z|q)?  # modifier (ignored)
 #   [diouxXeEfFgGaAcCsSp%]  # conversion
-
-next_or_die(s::AbstractString, k) = !done(s,k) ? next(s,k) :
-    throw(ArgumentError("invalid printf format string: $(repr(s))"))
-
+#
+# returns tuple (flags, width, precision, c, k, pos)
 function parse1(s::AbstractString, k::Integer)
     j = k
     width = 0
@@ -175,46 +176,98 @@ function parse1(s::AbstractString, k::Integer)
         c, k = next_or_die(s,k)
     end
     # validate conversion
-    if !(c in "diouxXDOUeEfFgGaAcCsSpn")
+    if !(c in "diouxXDOUeEfFgGaAcCsSp")
         throw(ArgumentError("invalid printf format string: $(repr(s))"))
     end
-    # TODO: warn about silly flag/conversion combinations
+    # warn about silly flag/conversion combinations
+    warn_unused(flags, width, precision, c)
     flags, width, precision, c, k, pos
 end
 
-function _printf(macroname, io, fmt, args)
+function warn_unused(flags::String, width::Int, prec::Int, c::Char)
+    c = lowercase(c)
+    unc = c in "diucp" && '#' in flags
+    unf = c in "csp" && flags != "" &&
+        !( '-' in flags  || (c == 'c' && '0' in flags ) || (c == 's' && '#' in flags))
+    unp = c in "cp" && prec >= 0
+
+    if unc || unf || unp
+        wt = width > 0 ? string(width) : ""
+        pt = prec >= 0 ? string('.', prec) : ""
+        tc = unf ? "flags " : ""
+        tp = unp ? "precision " : ""
+        text = string("unused ", tc, tp, "in format spec %", flags, wt, pt, c)
+        throw(ArgumentError(text)) # or @warn text
+    end
+end
+
+# generate code for macro expansion
+# as format allow plain string literals (no interpolation) and raw string literals
+#
+function printf_expr(macroname, io, fmt, args)
     if isa(fmt, Expr) && fmt.head == :macrocall && fmt.args[1] == Symbol("@raw_str")
         fmt = fmt.args[end]
     end
-
-    isa(fmt, AbstractString) ||
+    if !isa(fmt, AbstractString)
         throw(ArgumentError("$macroname: format must be a plain static string (no interpolation or prefix)"))
-    sym_args, blk, perm = gen(fmt)
-    has_splatting = false
-    for arg in args
-       if isa(arg, Expr) && arg.head == :...
-          has_splatting = true
-          break
-       end
     end
-    sargl = max(0, perm...)
+
+    sargs, blk, perm = gen(fmt) 
+
+    bind_vars!(macroname, true, io, sargs, blk, perm, args)
+end
+
+## check relationship between arguments in format and provided data
+# 1. for each format specifier ther must by exactly one data value
+# 2. each data item has to be output by the format
+# 3. the same data item may be re-used for several format specifiers
+#
+function check_args(mana, argl, argmax, perm)
+    if argl != argmax
+        throw(ArgumentError("$mana: wrong number of arguments ($argl) should be ($argmax)"))
+    end
+    if !( 1:argl ⊆ perm )
+        throw(ArgumentError("$mana: invalid permutation '$perm'"))
+    end
+end
+
+## Add code to pair symbolic args with data items sarg[i] := arg[perm[i]] by assignment
+# macroname: identification for error messages
+# ism: is called from macro
+# io: output IO
+# sargs: contain variable names and data types as provided by gen-subroutines
+# blk: generated code
+# perm: list of argument-indices associated to the variable names
+# args: arguments from macro call or (already evaluated) from format-call
+#
+# note: The statements are added in reverse order of later execution
+#       art the beginning of the given block.
+#
+function bind_vars!(macroname, ism::Bool, io, sargs, blk, perm, args)
+
+    has_splatting = ism && any(arg -> isa(arg, Expr) && arg.head == :..., args)
+    argmax = max(0, perm...)
     #
     #  Immediately check for corresponding arguments if there is no splatting
     #
+    blkst = blk.args # the executable statements of the block
     if !has_splatting
         argl = length(args)
-        if sargl != argl
-            throw(ArgumentError("$macroname: wrong number of arguments ($argl) should be ($sargl)"))
-        end
-        1:argl ⊆ perm || throw(ArgumentError("$macroname: invalid permutation '$perm'"))
+        check_args(macroname, argl, argmax, perm)
     end
     
-    for i = length(sym_args):-1:1
-        var = sym_args[i].args[1]
+    for i = length(sargs):-1:1
+        var = sargs[i].args[1]
         if has_splatting
-            pushfirst!(blk.args, :($var = G[$(perm[i])]))
+            # add assignment statement with values stored in runtime variable G
+            pushfirst!(blkst, :($var = G[$(perm[i])]))
         else
-            pushfirst!(blk.args, :($var = $(esc(args[perm[i]]))))
+            rhs = args[perm[i]]
+            rhs = ism ? esc(rhs) : rhs
+            if rhs != var
+                # add assignment statement with constant values
+                pushfirst!(blkst, :($var = $rhs))
+            end
         end
     end
 
@@ -223,20 +276,16 @@ function _printf(macroname, io, fmt, args)
     #  expansion time if there is splatting.
     #
     if has_splatting
-       x = Expr(:call,:tuple,args...)
-       pushfirst!(blk.args,
+       x = Expr(:call, :tuple, args...) # all arguments expanded into one tuple
+       pushfirst!(blkst,
           quote
-             G = $(esc(x))
-             argl = length(G)
-             if argl != $sargl 
-                 throw(ArgumentError(string($macroname,": wrong number of arguments (",length(G),") should be (",$sargl,")")))
-             end
-             1:argl ⊆ $perm || throw(ArgumentError(string($macroname,": invalid permutation '",$perm,"'")))
+             G = $(esc(x))  # evaluate at runtime
+             check_args($macroname, length(G), $argmax, $perm)
           end
        )
     end
 
-    pushfirst!(blk.args, :(out = $io))
+    pushfirst!(blkst, :(out = $io))
     Expr(:let, Expr(:block), blk)
 end
 
@@ -265,11 +314,11 @@ julia> @printf "%.0f %.1f %f\\n" 0.5 0.025 -0.0078125
 macro printf(args...)
     isempty(args) && throw(ArgumentError("@printf: called with no arguments"))
     if isa(args[1], AbstractString) || is_str_expr(args[1])
-        _printf("@printf", :STDOUT, args[1], args[2:end])
+        printf_expr("@printf", :STDOUT, args[1], args[2:end])
     else
         (length(args) >= 2 && (isa(args[2], AbstractString) || is_str_expr(args[2]))) ||
             throw(ArgumentError("@printf: first or second argument must be a format string"))
-        _printf("@printf", esc(args[1]), args[2], args[3:end])
+        printf_expr("@printf", esc(args[1]), args[2], args[3:end])
     end
 end
 
@@ -290,56 +339,96 @@ macro sprintf(args...)
     isempty(args) && throw(ArgumentError("@sprintf: called with zero arguments"))
     isa(args[1], AbstractString) || is_str_expr(args[1]) ||
         throw(ArgumentError("@sprintf: first argument must be a format string"))
-    letexpr = _printf("@sprintf", :(IOBuffer()), args[1], args[2:end])
+    letexpr = printf_expr("@sprintf", :(IOBuffer()), args[1], args[2:end])
     push!(letexpr.args[2].args, :(String(take!(out))))
     letexpr
 end
 
 ##### formatting functions                    
+## kind of type intersection, base on the symbols :Any, :Real, :Integer, :Ptr
+# note: gen_d returns :Real (not :Integer)
+#       gen_c returns :Integer (not :Char)
+#
+function typeinter(a::Symbol, b::Symbol)
+    a === :Any ? b :
+    b === :Any ? a :
+    a === b ?    a :
+    a === :Real ? b :
+    b === :Real ? a :
+                :PIC
+end
 
-function _format(fmt::AbstractString)
-    sym_args, blk, perm = gen(fmt)
-    fun1 = :($(genfun())(out::IO) = nothing)
-    alist = fun1.args[1].args 
-    if isperm(perm)
-        append!(alist, sym_args[invperm(perm)])
-    else
-        fargs, assi = permute_args(sym_args, perm)
-        append!(alist, fargs)
-        prepend!(blk.args, assi)
+## map to the actual argument types according to format specs
+#
+function typearg(a::Symbol)
+    a === :Any ? a : 
+    a === :Real ? a :
+    a === :Integer ? Expr(:curly, :Union, :Char, a) :
+    a === :Ptr ? Expr(:curly, :Union, :Integer, a) :
+                :Integer
+end
+
+## for all arguments determine the formal argument types
+# to be accepted by the function
+# Re-use the varaible names of the symbolic arguments
+# If multiple format specs are delivered by the same argument
+# the argument type must be restricted reasonably
+#
+function typeconsolidate(sargs, perm)
+    n = max(0, perm...)
+    m = length(perm)
+    fargs = Vector{Any}(nothing, n)
+
+    for i = 1:m
+        j = perm[i]
+        faj = fargs[j]
+        if faj === nothing
+            fargs[j] = sargs[i] # :(var::type)
+        else
+            ft = faj.args[2]
+            st = sargs[i].args[2]
+            if st != :Any
+                if ft == :Any
+                    faj.args[2] = st
+                else
+                    faj.args[2] = typeinter(ft, st)
+                end
+            end
+        end
     end
-    fun1.args[2].args[2] = blk
+    for j = 1:n
+        faj = fargs[j]
+        if faj === nothing
+            fargs[j] = :(::Any) # unused argument without variable name
+        else
+            faj.args[2] = typearg(faj.args[2]) # final type 
+        end
+    end
+    fargs
+end
+
+
+## generate function definition for format function
+#
+function format_expr(fmt::AbstractString)
+    sargs, blk, perm = gen(fmt)
+    fargs = typeconsolidate(sargs, perm)
+    args = map(p->p.args[1], fargs) 
+    blk = bind_vars!("format", false, :out, sargs, blk, perm, args)
     
-    eval(fun1)
+    fun = :($(genfun())(out::IO) = nothing)
+    append!(fun.args[1].args, fargs)
+    fun.args[2].args[2] = blk
+    fun
 end
 
-function permute_args(sym, perm)
-    length(perm) > 0 || throw(ArgumentError("empty permutation"))
-    n = maximum(perm)
-    r = 1:n
-    r ⊆ perm || throw(ArgumentError("invalid permutation '$perm'"))
-    targs = Vector(uninitialized, n)
-    fill!(targs, Any)
-    for (i, s) in zip(perm, sym)
-        targs[i] = typeintersect(targs[i], eval(s.args[2])) 
-    end
-    fargs = Vector(uninitialized, n)
-    for i in r
-        ti = targs[i]
-        ti == Union{} && throw(ArgumentError("incompatible types for pos $i"))
-        fargs[i] = :($(gensym())::$(targs[i]))
-    end
-    assi = Vector(uninitialized, length(perm))
-    for (j, i) in enumerate(perm)
-        assi[j] = :($(sym[j].args[1]) = $(fargs[i].args[1])) 
-    end
-    fargs, assi
-end
+# generate anonymous function
+format_fun(fmt) = eval(format_expr(fmt))
 
 function format(fmt::AbstractString)
     global ALL_FORMATS
     get!(ALL_FORMATS, fmt) do
-        f = _format(fmt)
+        f = format_fun(fmt)
     end
 end
 
