@@ -6,7 +6,7 @@ module Printff
 # the implementations here is copied from
 # what is left in base/printf.jl, and uses the utility there
 
-export @printf, @sprintf
+export @printf, @sprintf, @format_str
 export format, format_expr, printf, sprintf
 
 import Base.Printf: is_str_expr, fix_dec, DIGITS, print_fixed, decode_dec, decode_hex,
@@ -204,7 +204,7 @@ end
 # generate code for macro expansion
 # as format allow plain string literals (no interpolation) and raw string literals
 #
-function printf_expr(macroname, io, fmt, args)
+function printf_expr(macroname, line, io, fmt, args)
     if isa(fmt, Expr) && fmt.head == :macrocall && fmt.args[1] == Symbol("@raw_str")
         fmt = fmt.args[end]
     end
@@ -285,7 +285,7 @@ function bind_vars!(macroname, ism::Bool, io, sargs, blk, perm, args)
        )
     end
 
-    pushfirst!(blkst, :(out = $io))
+    io != :out && pushfirst!(blkst, :(out = $io))
     Expr(:let, Expr(:block), blk)
 end
 
@@ -314,11 +314,11 @@ julia> @printf "%.0f %.1f %f\\n" 0.5 0.025 -0.0078125
 macro printf(args...)
     isempty(args) && throw(ArgumentError("@printf: called with no arguments"))
     if isa(args[1], AbstractString) || is_str_expr(args[1])
-        printf_expr("@printf", :STDOUT, args[1], args[2:end])
+        printf_expr("@printf", __source__, STDOUT, args[1], args[2:end])
     else
         (length(args) >= 2 && (isa(args[2], AbstractString) || is_str_expr(args[2]))) ||
             throw(ArgumentError("@printf: first or second argument must be a format string"))
-        printf_expr("@printf", esc(args[1]), args[2], args[3:end])
+        printf_expr("@printf", __source__, esc(args[1]), args[2], args[3:end])
     end
 end
 
@@ -339,9 +339,19 @@ macro sprintf(args...)
     isempty(args) && throw(ArgumentError("@sprintf: called with zero arguments"))
     isa(args[1], AbstractString) || is_str_expr(args[1]) ||
         throw(ArgumentError("@sprintf: first argument must be a format string"))
-    letexpr = printf_expr("@sprintf", :(IOBuffer()), args[1], args[2:end])
+    letexpr = printf_expr("@sprintf", __source__, :(IOBuffer()), args[1], args[2:end])
     push!(letexpr.args[2].args, :(String(take!(out))))
     letexpr
+end
+"""
+    format" literal format string"
+
+Generate a format function f, which can be called like f(io, args...).
+That has the same effect as `@printf(io, args..)` but the generated code is not
+inlined, but in a separate local function.
+"""
+macro format_str(arg)
+    format_expr(__source__, arg)
 end
 
 ##### formatting functions                    
@@ -410,7 +420,7 @@ end
 
 ## generate function definition for format function
 #
-function format_expr(fmt::AbstractString)
+function format_expr(line::LineNumberNode, fmt::AbstractString)
     sargs, blk, perm = gen(fmt)
     fargs = typeconsolidate(sargs, perm)
     args = map(p->p.args[1], fargs) 
@@ -419,20 +429,25 @@ function format_expr(fmt::AbstractString)
     fun = :($(genfun())(out::IO) = nothing)
     append!(fun.args[1].args, fargs)
     fun.args[2].args[2] = blk
+    fun.args[2].args[1] = line
     fun
 end
 
 # generate anonymous function
-format_fun(fmt) = eval(format_expr(fmt))
+function format_fun(line::LineNumberNode, fmt)
+    f = eval(format_expr(line, fmt))
+    form(io::IO, args...) = Base.invokelatest(f, io, args...)::Nothing
+end
 
 function format(fmt::AbstractString)
+    line = LineNumberNode(@__LINE__, Symbol(joinpath(@__DIR__, @__FILE__)))
     global ALL_FORMATS
     get!(ALL_FORMATS, fmt) do
-        f = format_fun(fmt)
+        f = format_fun(line, fmt)
     end
 end
 
-printf(io::IO, fmt::Function, args...) = Base.invokelatest(fmt, io, args...)::Nothing
+printf(io::IO, fmt::Function, args...) = fmt(io, args...)
 printf(fmt::Function, args...) = printf(STDOUT, fmt, args...)
 function sprintf(fmt::Function, args...)
     io = IOBuffer()

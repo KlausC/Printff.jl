@@ -2,8 +2,8 @@
 
 using Test, Printff
 
-# to test macro expansion - call like @test_thm Exception @macroexpand(@sprintf ...)
-macro test_thm(ty, ex)
+# to test macro expansion - call like @test_me <Exception> @macroexpand(<@sprintf ...>)
+macro test_me(ty, ex)
     return quote
         @test_throws $(esc(ty)) try
             $(esc(ex))
@@ -205,14 +205,14 @@ end
 # escape %
 @test (@sprintf "%%") == "%"
 @test (@sprintf "%%s") == "%s"
-@test_thm ArgumentError("invalid printf format string: \"%\"") @macroexpand(@sprintf "%") #" (fixes syntax highlighting)
+@test_me ArgumentError("invalid printf format string: \"%\"") @macroexpand(@sprintf "%") #" (fixes syntax highlighting)
 
 # argument count
-@test_thm ArgumentError("@sprintf: wrong number of arguments (0) should be (1)") @macroexpand(@sprintf "%s")
-@test_thm ArgumentError("@sprintf: wrong number of arguments (2) should be (1)") @macroexpand(@sprintf "%s" "1" "2")
+@test_me ArgumentError("@sprintf: wrong number of arguments (0) should be (1)") @macroexpand(@sprintf "%s")
+@test_me ArgumentError("@sprintf: wrong number of arguments (2) should be (1)") @macroexpand(@sprintf "%s" "1" "2")
 
 # no interpolation
-@test_thm ArgumentError("@sprintf: format must be a plain static string (no interpolation or prefix)") @macroexpand(@sprintf "$n")
+@test_me ArgumentError("@sprintf: format must be a plain static string (no interpolation or prefix)") @macroexpand(@sprintf "$n")
 
 # type width specifier parsing (ignored)
 @test (@sprintf "%llf" 1.2) == "1.200000"
@@ -258,7 +258,7 @@ end
 # invalid format specifiers, not "diouxXDOUeEfFgGaAcCsSpn"
 for c in "bBhHIjJkKlLmMNPqQrRtTvVwWyYzZ"
     fmt_str = string("%", c)
-    @test_thm ArgumentError("@sprintf: first argument must be a format string") @macroexpand(@sprintf $fmt_str 1)
+    @test_me ArgumentError("@sprintf: first argument must be a format string") @macroexpand(@sprintf $fmt_str 1)
 end
 
 # combo
@@ -273,7 +273,7 @@ end
 @test_throws ArgumentError("@sprintf: wrong number of arguments (9) should be (10)") (@sprintf "%s %s %s %d %d %d %f %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...)
 
 # @printf
-@test_thm ArgumentError("@printf: first or second argument must be a format string") @macroexpand(@printf 1)
+@test_me ArgumentError("@printf: first or second argument must be a format string") @macroexpand(@printf 1)
 
 # Check bug with trailing nul printing BigFloat
 @test (@sprintf("%.330f", BigFloat(1)))[end] != '\0'
@@ -288,10 +288,10 @@ end
 @test (@sprintf("%d\u0f00%d", 1, 2)) == "1\u0f002"
 @test (@sprintf("%d\U0001ffff%d", 1, 2)) == "1\U0001ffff2"
 @test (@sprintf("%d\u2203%d\u0203", 1, 2)) == "1\u22032\u0203"
-@test_thm ArgumentError @macroexpand(@sprintf("%y%d", 1, 2))
-@test_thm ArgumentError @macroexpand(@sprintf("%\u00d0%d", 1, 2))
-@test_thm ArgumentError @macroexpand(@sprintf("%\u0f00%d", 1, 2))
-@test_thm ArgumentError @macroexpand(@sprintf("%\U0001ffff%d", 1, 2))
+@test_me ArgumentError @macroexpand(@sprintf("%y%d", 1, 2))
+@test_me ArgumentError @macroexpand(@sprintf("%\u00d0%d", 1, 2))
+@test_me ArgumentError @macroexpand(@sprintf("%\u0f00%d", 1, 2))
+@test_me ArgumentError @macroexpand(@sprintf("%\U0001ffff%d", 1, 2))
 
 # test extensions
 # change argument positions
