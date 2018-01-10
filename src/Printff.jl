@@ -209,7 +209,7 @@ function printf_expr(macroname, line, io, fmt, args)
         fmt = fmt.args[end]
     end
     if !isa(fmt, AbstractString)
-        throw(ArgumentError("$macroname: format must be a plain static string (no interpolation or prefix)"))
+        throw(ArgumentError("$macroname: format must be a plain static string (no interpolation or macro prefix)"))
     end
 
     sargs, blk, perm = gen(fmt) 
@@ -291,15 +291,18 @@ end
 
 
 """
-    @printf([io::IOStream], "%Fmt", args...)
+    @printf([io::IO,] "%Fmt", args...)
 
 Print `args` using C `printf` style format specification string, with some caveats:
 `Inf` and `NaN` are printed consistently as `Inf` and `NaN` for flags `%a`, `%A`,
 `%e`, `%E`, `%f`, `%F`, `%g`, and `%G`. Furthermore, if a floating point number is
 equally close to the numeric values of two possible output strings, the output
 string further away from zero is chosen.
+The variable length-specifiers `*` are not supported.
+The argument-numbering syntax of C and C++ boost is supported, where the number delimiter
+`\$` may be replaced by `&`.
 
-Optionally, an `IOStream`
+Optionally, an `IO` stream of buffer
 may be passed as the first argument to redirect output.
 
 # Examples
@@ -329,7 +332,7 @@ Return `@printf` formatted output as string.
 
 # Examples
 ```jldoctest
-julia> s = @sprintf "this is a %s %15.1f" "test" 34.567;
+julia> s = @sprintf "this is a %2% s %1&15.1f" 34.567 "test";
 
 julia> println(s)
 this is a test            34.6
@@ -347,8 +350,9 @@ end
     format" literal format string"
 
 Generate a format function f, which can be called like f(io, args...).
-That has the same effect as `@printf(io, args..)` but the generated code is not
-inlined, but in a separate local function.
+That has the same effect as `@printf(io, "format string", args..)` while the generated
+code is not inlined, but in a separate local function.
+The format function is generated only once for each different format string.
 """
 macro format_str(arg)
     format_expr(__source__, arg)
@@ -435,10 +439,34 @@ end
 
 # generate anonymous function
 function format_fun(line::LineNumberNode, fmt)
-    f = eval(format_expr(line, fmt))
-    form(io::IO, args...) = Base.invokelatest(f, io, args...)::Nothing
+    f(io::IO, args...) = Base.invokelatest(eval(format_expr(line, fmt)), io, args...)
 end
+"""
+    format(fmt::AbstractString) -> Function(::IO, args...)
 
+Generate a format function f, which can be called like f(io, args...).
+That has the same effect as `printf(io, "format string", args..)`.
+The format function is generated only once for each different format string.
+
+The variable length-specifiers `*` are not supported.
+The argument-numbering syntax of C and C++ boost is supported, where the number delimiter
+`\$` may be replaced by `&`.
+The arguments are numberd starting with `1`. The arguments may be explicitly referred to
+from the format string. In each format specification after the starting `%` and optional
+argument number may be given in decimal digits, followed by `&` or `\$`. As an additional
+feature copied from C++, `%<digits>%` behaves like `%<digits>&s`.
+
+The number and type of the arguments is restricted by the format. All arguments need to
+be used by the format. Each argument may be used multiple times.
+The argument types are determined by the conversion character in the format:
+```
+    %c                              Char and Integer
+    %d                              Real - printed value is rounded to Integer
+    %a, %A, %e, %f, %F, %g, %G      Real
+    %s                              Any
+    %p                              Ptr and Integer
+```
+"""
 function format(fmt::AbstractString)
     line = LineNumberNode(@__LINE__, Symbol(joinpath(@__DIR__, @__FILE__)))
     global ALL_FORMATS
@@ -446,7 +474,31 @@ function format(fmt::AbstractString)
         f = format_fun(line, fmt)
     end
 end
+"""
+    printf([io::IO,] fmt, args...)
+    sprintf(fmt, args) -> String
 
+Print `args` using C `printf` style format specification string, with some caveats:
+`Inf` and `NaN` are printed consistently as `Inf` and `NaN` for flags `%d`, `%s`, `%a`, `%A`,
+`%e`, `%E`, `%f`, `%F`, `%g`, and `%G`. Furthermore, if a floating point number is
+equally close to the numeric values of two possible output strings, the output
+string further away from zero is chosen.
+For further details of the format see [`format`](@ref).
+The format `fmt` is not restricted to literal strings without interpolation syntax as is
+the case for the corresponding macro calls.
+
+Optionally, an `IO` stream or buffer 
+may be passed as the first argument to redirect output.
+
+# Examples
+```jldoctest
+julia> printf(STDERR, "%f %F %f %F\\n", Inf, Inf, NaN, NaN)
+Inf Inf NaN NaN\n
+
+julia> printf("%2&.0f %1\\\$.1f %3&f\\n", 0.025, 0.5, -0.0078125)
+1 0.0 -0.007813
+```
+"""
 printf(io::IO, fmt::Function, args...) = fmt(io, args...)
 printf(fmt::Function, args...) = printf(STDOUT, fmt, args...)
 function sprintf(fmt::Function, args...)
@@ -462,6 +514,13 @@ sprintf(fmt::AbstractString, args...) = sprintf(format(fmt), args...)
 # generate a syntactic correct unique function name in this Module
 genfun() = Symbol("fmt", replace(string(gensym()), '#'=>'_'))
 
+"""
+    ALL_FORMATS::Dict{String,Function}
+
+Global variable storing all generated format functions generated during the first
+invocation of `format`, `printf`, `sprintf`, or `@format`. Not for `@printf` and
+`@sprintf`.
+"""
 const ALL_FORMATS = Dict{String, Function}()
 
 
